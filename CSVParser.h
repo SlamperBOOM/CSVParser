@@ -12,57 +12,64 @@
 //for inserting values in tuple
 namespace
 {
-	template<int index, typename Func, typename... Types>
+	template<int index, typename... Types>
 	struct iterate_tuple_insert
 	{
-		static void next(std::tuple<Types...>& t, Func func, const size_t& line, std::string* args)
+		static void next(std::tuple<Types...>& t, const size_t& line, std::string* args)
 		{
-			iterate_tuple_insert<index - 1, Func, Types...>::next(t, func, line, args);
+			iterate_tuple_insert<index - 1, Types...>::next(t, line, args);
 
-			try {
-				func(index, std::get<index>(t), line, args);
-			}
-			catch (std::invalid_argument&)
-			{
-				std::cerr << "Bad value at (" << line << "," << index + 1 << ")!" << std::endl;
-			}
+			std::get<index>(t) = ConvertValue<std::get<index>(t)>::convert(std::get<index>(t), index, line, args);
 		}
 	};
 
-	template<typename Func, typename... Types>
-	struct iterate_tuple_insert<0, Func, Types...>
+	template<typename... Types>
+	struct iterate_tuple_insert<0, Types...>
 	{
-		static void next(std::tuple<Types...>& t, Func func, const size_t& line, std::string* args)
+		static void next(std::tuple<Types...>& t, const size_t& line, std::string* args)
 		{
-			try {
-				func(0, std::get<0>(t), line, args);
-			}
-			catch (std::invalid_argument&)
-			{
-				std::cerr << "Bad value at (" << line << "," << 1 << ")!" << std::endl;
-			}
+			std::get<0>(t) = ConvertValue<std::get<0>(t)>::convert(std::get<0>(t), 0, line, args);
 		}
 	};
 
-	template<typename Func, typename... Types>
-	void InsertForEach(std::tuple<Types...>& t, Func func, const size_t& line, std::string* args)
+	template<typename... Types>
+	void InsertForEach(std::tuple<Types...>& t, const size_t& line, std::string* args)
 	{
 		int const t_size = sizeof...(Types);
-		iterate_tuple_insert<t_size - 1, Func, Types...>::next(t, func, line, args);
+		iterate_tuple_insert<t_size - 1, Types...>::next(t, line, args);
 	}
 
+	template<typename T>
 	struct ConvertValue
 	{
-		template<typename T>
-		void operator()(int index, T&& t, const size_t& line, std::string* args)
+	public:
+		static T convert(T elem, int index, const size_t& line, std::string* args)
 		{
+			extern T t;
 			std::istringstream(args[index]) >> t;
 			std::ostringstream ss;
 			ss << t;
 			if (ss.str() != args[index])
 			{
-				throw std::invalid_argument("");
+				std::string message = "Bad value at (";
+				message += std::to_string(line);
+				message += ",";
+				message += std::to_string(index + 1);
+				message += ")!";
+				std::cerr << message;
+				throw std::invalid_argument(message.c_str());
 			}
+			return t;
+		}
+	};
+
+	template<>
+	struct ConvertValue<std::string>
+	{
+	public:
+		static std::string convert(std::string elem, int index, const size_t& line, std::string* args)
+		{
+			return args[index];
 		}
 	};
 }
@@ -73,41 +80,41 @@ namespace
 	template<int index, typename Func, typename... Types>
 	struct iterate_tuple_print
 	{
-		static void next(std::tuple<Types...>& t, Func func, bool endofline)
+		static void next(std::ostream& stream, std::tuple<Types...>& t, Func func, bool endofline)
 		{
-			iterate_tuple_print<index - 1, Func, Types...>::next(t, func, false);
-			func(index, std::get<index>(t), endofline);
+			iterate_tuple_print<index - 1, Func, Types...>::next(stream, t, func, false);
+			func(stream, std::get<index>(t), endofline);
 		}
 	};
 
 	template<typename Func, typename... Types>
 	struct iterate_tuple_print<0, Func, Types...>
 	{
-		static void next(std::tuple<Types...>& t, Func func, bool endofline)
+		static void next(std::ostream& stream, std::tuple<Types...>& t, Func func, bool endofline)
 		{
-			func(0, std::get<0>(t), endofline);
+			func(stream, std::get<0>(t), endofline);
 		}
 	};
 
 	template<typename Func, typename... Types>
-	void PrintForEach(std::tuple<Types...>& t, Func func)
+	void PrintForEach(std::ostream& stream, std::tuple<Types...>& t, Func func)
 	{
 		int const t_size = sizeof...(Types);
-		iterate_tuple_print<t_size - 1, Func, Types...>::next(t, func, true);
+		iterate_tuple_print<t_size - 1, Func, Types...>::next(stream, t, func, true);
 	}
 
 	struct PrintValue
 	{
 		template<typename T>
-		void operator()(int index, T&& t, bool endofline = false)
+		void operator()(std::ostream& stream, T&& t, bool endofline = false)
 		{
 			if (endofline)
 			{
-				std::cout << t;
+				stream << t;
 			}
 			else
 			{
-				std::cout << t << ", ";
+				stream << t << ", ";
 			}
 		}
 	};
@@ -116,7 +123,7 @@ namespace
 template<typename... Types>
 auto operator<<(std::ostream& stream, std::tuple<Types...>& row)
 {
-	PrintForEach(row, PrintValue());
+	PrintForEach(stream, row, PrintValue());
 }
 
 template<typename... Types>
@@ -124,32 +131,75 @@ class CSVParser
 {
 public:
 	template<typename ...T>
-	struct InputIterator
+	class InputIterator
 	{
+	public:
 		using iterator_category = std::input_iterator_tag;
 		using value_type = std::tuple<T...>;
-		using difference_type = std::ptrdiff_t;
 		using pointer = value_type*;
 		using reference = value_type&;
-
 		using iterator = InputIterator<T...>;
-		size_t index = 0;
-		CSVParser<T...>* iter;
-		InputIterator(CSVParser<T...>* pars) : iter(pars) {}
+		
+		InputIterator(CSVParser<T...>* pars, const long long& line_number)
+		{
+			index = line_number;
+			iter = pars;
+			file_position = iter->file_position;
+			Parsline();
+		}
 
-		InputIterator(const iterator&) = default;
-		iterator& operator=(const iterator&) = default;
+		InputIterator(const iterator& it)
+		{
+			this->index = it.index;
+			this->file_position = it.file_position;
+			this->item = it.item;
+			this->iter = it.iter;
+		}
+
+		iterator& operator=(const iterator& it)
+		{
+			this->index = it.index;
+			this->file_position = it.file_position;
+			this->item = it.item;
+			this->iter = it.iter;
+		}
+
 		~InputIterator() = default;
+
+		void Parsline()
+		{
+			iter->stream->seekg(file_position);
+			std::string line;
+			if (std::getline(*iter->stream, line, iter->row_div))
+			{
+				file_position = iter->stream->tellg();
+			}
+			else
+			{
+				index = -1;
+			}
+
+			std::string* args = new std::string[sizeof...(Types)];
+			for (size_t i = 0; i < sizeof...(Types); ++i)
+			{
+				size_t pos = line.find(iter->column_div);
+				std::string arg = line.substr(0, pos);
+				args[i] = arg;
+				line.erase(0, pos + 1);
+			}
+			InsertForEach(item, index + 1, args);
+		}
 
 		friend void swap(iterator& a, iterator& b)
 		{
 			std::swap(a, b);
 		}
 
-		friend bool operator==(const iterator& l, const iterator& r)
+		friend bool operator==(iterator& l, iterator& r)
 		{
-			return l.iter == r.iter;
+			return l.iter == r.iter && l.index == r.index && l.file_position == r.file_position && l.index == r.index;
 		}
+
 		friend bool operator!=(const iterator& l, const iterator& r)
 		{
 			return !(l == r);
@@ -157,73 +207,61 @@ public:
 
 		reference operator*()
 		{
-			return iter->data[index];
+			return item;
 		}
 
 		pointer operator->()
 		{
-			return std::addressof(**this);
+			return &item;
 		}
 
-		iterator& operator++(int)
+		iterator& operator++()
 		{
-			if (index < data.size()) index++;
+			if (index != -1)
+			{
+				index++;
+				Parsline();
+			}
 			return *this;
 		}
 
+	private:
+		long long index = 0;
+		size_t file_position;
+		value_type item;
+		CSVParser<T...>* iter;
+
 	};
 
-	InputIterator<Types...> begin(CSVParser<Types...>& pars)
+	InputIterator<Types...> begin()
 	{
-		InputIterator<Types...> it(0);
+		InputIterator<Types...> it(this, 0);
 		return it;
 	}
 
-	InputIterator<Types...> end(CSVParser<Types...>& pars)
+	InputIterator<Types...> end()
 	{
-		InputIterator<Types...> it(pars.data.size());
+		InputIterator<Types...> it(this, -1);
 		return it;
 	}
 
-	CSVParser() 
-	{
-		data.resize(0);
-	}
+	CSVParser() {}
 
-	CSVParser(std::istream& input)
+	CSVParser(std::istream& input_)
 	{
-		data.resize(0);
-		Pars(input, 0);
+		stream = &input_;
+		file_position = 0;
 	}
 
 	CSVParser(std::istream& input, const size_t& skip_count)
-	{
-		data.resize(0);
-		Pars(input, skip_count);
-	}
-
-	void Pars(std::istream& input, const size_t& skip_count)
 	{
 		std::string line;
 		for (int i = 0; i < skip_count; ++i)
 		{
 			std::getline(input, line, row_div);
 		}
-		size_t line_count = 0;
-		while (std::getline(input, line, row_div))
-		{
-			data.resize(line_count + 1);
-			std::string* args = new std::string[sizeof...(Types)];
-			for (size_t i = 0; i < sizeof...(Types); ++i)
-			{
-				size_t pos = line.find(column_div);
-				std::string arg = line.substr(0, pos);
-				args[i] = arg;
-				line.erase(0, pos + 1);
-			}
-			InsertForEach(data[line_count], ConvertValue(), line_count + 1, args);
-			line_count++;
-		}
+		stream = &input;
+		file_position = input.tellg();
 	}
 
 	void SetDividers(char row_divider, char column_divider) 
@@ -232,17 +270,13 @@ public:
 		column_div = column_divider;
 	}
 
-	std::tuple<Types...>& GetRow(const size_t& index)
-	{
-		return data[index];
-	}
-
 	friend auto operator<<(std::ostream& stream, std::tuple<Types...>& row);
 	
 private:
-	std::vector<std::tuple<Types...>> data;
+	size_t file_position;
 	char row_div = '\n';
 	char column_div = ',';
+	std::istream* stream;
 
 	
 };

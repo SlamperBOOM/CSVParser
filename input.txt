@@ -1,4 +1,4 @@
 Number,Value,Percent
-1,ss,100%
+1,100,100% abs cca
 2,200,50%
 10,500,10.5%
